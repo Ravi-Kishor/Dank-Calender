@@ -1,4 +1,68 @@
-printf 'r%s.%s' \
+name: Build DankCalendar (Arch Linux / Zen 3)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 0 * * *" # Daily at 00:17 UTC
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dankcalendar-zen3-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Update Arch build environment
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm \
+            base-devel git go make binutils \
+            zstd libarchive sudo
+
+      - name: Create unprivileged package builder
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          install -d -o builder -g builder /build/dankcalendar
+
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare PKGBUILD
+        run: |
+          set -euo pipefail
+          cat > /build/dankcalendar/PKGBUILD <<'PKGBUILD'
+          pkgname=dankcalendar-git
+          pkgver=0
+          pkgrel=1
+          pkgdesc='Calendar app with local, Google, Microsoft, CalDAV and iCloud support'
+          arch=('x86_64')
+          url='https://github.com/AvengeMedia/dankcalendar'
+          license=('MIT')
+          depends=('quickshell')
+          makedepends=('git' 'go' 'make')
+          provides=('dankcalendar')
+          conflicts=('dankcalendar')
+          source=('dankcalendar::git+https://github.com/AvengeMedia/dankcalendar.git#branch=master')
+          sha256sums=('SKIP')
+
+          pkgver() {
+            cd "$srcdir/dankcalendar"
+            printf 'r%s.%s' \
               "$(git rev-list --count HEAD)" \
               "$(git rev-parse --short=7 HEAD)"
           }
