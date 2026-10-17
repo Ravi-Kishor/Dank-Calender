@@ -41,6 +41,8 @@ jobs:
           pkgname=dankcalendar-git
           pkgver=0
           pkgrel=1
+          # Go is built stripped (-s -w); don't generate a separate debug package.
+          options=('!debug')
           pkgdesc='Local, Google, Microsoft, CalDAV, and iCloud calendars for the Dank desktop (latest Git build)'
           arch=('x86_64')
           url='https://github.com/AvengeMedia/dankcalendar'
@@ -119,7 +121,7 @@ jobs:
           set -euo pipefail
           cd /build/dankcalendar
 
-          PKG="$(find . -maxdepth 1 -type f -name 'dankcalendar-git-*.pkg.tar.zst' -print -quit)"
+          PKG="$(find . -maxdepth 1 -type f -name 'dankcalendar-git-*.pkg.tar.zst' ! -name 'dankcalendar-git-debug-*' -print -quit)"
           test -n "$PKG"
           pacman -Qip "$PKG"
 
