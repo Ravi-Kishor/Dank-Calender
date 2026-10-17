@@ -1,4 +1,4 @@
-name: Build DankCalendar AUR-style binary package
+name: Build DankCalendar Git (Arch Linux / Zen 3)
 
 on:
   workflow_dispatch:
@@ -9,11 +9,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: dankcalendar-bin-release
+  group: dankcalendar-git-release
   cancel-in-progress: false
 
 jobs:
-  package:
+  build:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -24,122 +24,118 @@ jobs:
           set -euo pipefail
           pacman -Syu --noconfirm
           pacman -S --needed --noconfirm \
-            base-devel curl jq git gzip zstd libarchive \
+            base-devel git go make binutils zstd libarchive \
             quickshell qt6-declarative
 
-      - name: Find latest upstream release
-        id: upstream
-        run: |
-          set -euo pipefail
-          TAG="$(curl -fsSL https://api.github.com/repos/AvengeMedia/dankcalendar/releases/latest | jq -r '.tag_name')"
-          test -n "$TAG" && test "$TAG" != "null"
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Latest upstream release: $TAG"
-
-      - name: Create AUR-style PKGBUILD
-        env:
-          PKGVER: ${{ steps.upstream.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p /build/dankcalendar-bin
-          cd /build/dankcalendar-bin
-
-          cat > PKGBUILD <<'PKGBUILD'
-          _pkgauthor=AvengeMedia
-          _repo=dankcalendar
-          _binname=dcal
-          _iconname=com.danklinux.dankcalendar
-          _desktopid=com.danklinux.dankcalendar
-
-          pkgname=dankcalendar-bin
-          pkgver=__VERSION__
-          pkgrel=1
-          pkgdesc='Local, Google, Microsoft, and CalDAV calendars for the dank desktop (prebuilt binary)'
-          arch=('x86_64')
-          _barch='amd64'
-          url="https://github.com/${_pkgauthor}/${_repo}"
-          _urlraw="https://raw.githubusercontent.com/${_pkgauthor}/${_repo}/v${pkgver}"
-          _urlrel="${url}/releases/download/v${pkgver}"
-          license=('MIT')
-          depends=('quickshell' 'qt6-declarative')
-          optdepends=('dms-shell: dynamic theming via DankMaterialShell colors')
-          provides=("${_binname}" "${_repo}")
-          conflicts=("${_binname}" "${_repo}" 'dankcalendar-git')
-
-          source=(
-            "LICENSE-${pkgver}::${_urlraw}/LICENSE"
-            "README-${pkgver}.md::${_urlraw}/README.md"
-            "${_desktopid}-${pkgver}.desktop::${_urlraw}/assets/${_desktopid}.desktop"
-            "${_binname}-${pkgver}.service::${_urlraw}/assets/systemd/${_binname}.service"
-            "${_iconname}-${pkgver}.svg::${_urlrel}/${_iconname}.svg"
-            "${_binname}-completions-${pkgver}.tar.gz::${_urlrel}/${_binname}-completions-${pkgver}.tar.gz"
-            "${_binname}-x86_64-${pkgver}.gz::${_urlrel}/${_binname}-linux-${_barch}.gz"
-          )
-          sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
-          noextract=("${_binname}-x86_64-${pkgver}.gz")
-
-          prepare() {
-            cd "$srcdir"
-            gzip -dcf "${_binname}-x86_64-${pkgver}.gz" > "${_binname}-x86_64-${pkgver}"
-            mkdir -p completions
-            tar -xzf "${_binname}-completions-${pkgver}.tar.gz" -C completions
-          }
-
-          package() {
-            cd "$srcdir"
-
-            install -Dm755 "${_binname}-x86_64-${pkgver}" "$pkgdir/usr/bin/${_binname}"
-
-            # Upstream completion archive contains dcal, _dcal and dcal.fish.
-            install -Dm644 completions/dcal "$pkgdir/usr/share/bash-completion/completions/${_binname}"
-            install -Dm644 completions/_dcal "$pkgdir/usr/share/zsh/site-functions/_${_binname}"
-            install -Dm644 completions/dcal.fish "$pkgdir/usr/share/fish/vendor_completions.d/${_binname}.fish"
-
-            install -Dm644 "${_iconname}-${pkgver}.svg" \
-              "$pkgdir/usr/share/icons/hicolor/scalable/apps/${_iconname}.svg"
-            install -Dm644 "${_desktopid}-${pkgver}.desktop" \
-              "$pkgdir/usr/share/applications/${_desktopid}.desktop"
-            install -Dm644 "${_binname}-${pkgver}.service" \
-              "$pkgdir/usr/lib/systemd/user/${_binname}.service"
-            install -Dm644 "LICENSE-${pkgver}" \
-              "$pkgdir/usr/share/licenses/${pkgname}/LICENSE"
-            install -Dm644 "README-${pkgver}.md" \
-              "$pkgdir/usr/share/doc/${pkgname}/README.md"
-          }
-          PKGBUILD
-
-          # Expand the release version into PKGBUILD while keeping shell variables intact.
-          sed -i "s/__VERSION__/${PKGVER}/g" PKGBUILD
-
-      - name: Build Arch package
+      - name: Create unprivileged builder
         run: |
           set -euo pipefail
           useradd --create-home builder
-          chown -R builder:builder /build/dankcalendar-bin
+          install -d -o builder -g builder /build/dankcalendar
+          install -d -o builder -g builder /release
+
+      - name: Create latest-Git PKGBUILD
+        run: |
+          set -euo pipefail
+          cat > /build/dankcalendar/PKGBUILD <<'PKGBUILD'
+          pkgname=dankcalendar-git
+          pkgver=0
+          pkgrel=1
+          pkgdesc='Local, Google, Microsoft, CalDAV, and iCloud calendars for the Dank desktop (latest Git build)'
+          arch=('x86_64')
+          url='https://github.com/AvengeMedia/dankcalendar'
+          license=('MIT')
+          depends=('quickshell' 'qt6-declarative')
+          optdepends=('dms-shell: dynamic theming via DankMaterialShell colors')
+          makedepends=('git' 'go' 'make')
+          provides=('dcal' 'dankcalendar')
+          conflicts=('dcal' 'dankcalendar' 'dankcalendar-bin')
+          source=('dankcalendar::git+https://github.com/AvengeMedia/dankcalendar.git#branch=master')
+          sha256sums=('SKIP')
+
+          pkgver() {
+            cd "$srcdir/dankcalendar"
+            printf 'r%s.%s' \
+              "$(git rev-list --count HEAD)" \
+              "$(git rev-parse --short=8 HEAD)"
+          }
+
+          prepare() {
+            cd "$srcdir/dankcalendar"
+            git submodule sync --recursive
+            git submodule update --init --recursive
+          }
+
+          build() {
+            cd "$srcdir/dankcalendar"
+            export GOAMD64=v3
+            export CGO_ENABLED=0
+            export GOFLAGS='-trimpath'
+            export GOTOOLCHAIN=local
+            export MAKEFLAGS="-j$(nproc)"
+            make
+          }
+
+          check() {
+            cd "$srcdir/dankcalendar"
+            export GOAMD64=v3
+            export CGO_ENABLED=0
+            export GOFLAGS='-trimpath'
+            export GOTOOLCHAIN=local
+            make test
+          }
+
+          package() {
+            cd "$srcdir/dankcalendar"
+
+            make PREFIX=/usr DESTDIR="$pkgdir" install
+
+            install -Dm644 LICENSE \
+              "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+            install -Dm644 README.md \
+              "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+            # Package the optional user service without enabling it for the builder.
+            install -Dm644 assets/systemd/dcal.service \
+              "$pkgdir/usr/lib/systemd/user/dcal.service"
+          }
+          PKGBUILD
+
+          chown -R builder:builder /build/dankcalendar
+
+      - name: Build latest upstream Git package
+        run: |
+          set -euo pipefail
           su builder -s /bin/bash -c '
             set -euo pipefail
-            cd /build/dankcalendar-bin
+            cd /build/dankcalendar
+            export MAKEFLAGS="-j$(nproc)"
             makepkg --syncdeps --cleanbuild --clean --noconfirm
           '
 
       - name: Verify package and prepare release assets
+        id: verify
         run: |
           set -euo pipefail
-          cd /build/dankcalendar-bin
-          PKG="$(find . -maxdepth 1 -type f -name 'dankcalendar-bin-*.pkg.tar.zst' -print -quit)"
+          cd /build/dankcalendar
+
+          PKG="$(find . -maxdepth 1 -type f -name 'dankcalendar-git-*.pkg.tar.zst' -print -quit)"
           test -n "$PKG"
           pacman -Qip "$PKG"
+
           CONTENTS="$(bsdtar -tf "$PKG")"
           grep -qx 'usr/bin/dcal' <<< "$CONTENTS"
           grep -qx 'usr/share/applications/com.danklinux.dankcalendar.desktop' <<< "$CONTENTS"
+          grep -qx 'usr/share/icons/hicolor/scalable/apps/com.danklinux.dankcalendar.svg' <<< "$CONTENTS"
           grep -qx 'usr/lib/systemd/user/dcal.service' <<< "$CONTENTS"
 
-          mkdir -p /release
-          cp "$PKG" /release/dankcalendar-bin-latest-x86_64.pkg.tar.zst
+          VERSION="$(pacman -Qp --qf '%v' "$PKG")"
+          COMMIT="$(grep -oE 'r[0-9]+\.[0-9a-f]{8}' <<< "$VERSION" || true)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          cp "$PKG" /release/dankcalendar-git-latest-x86_64.pkg.tar.zst
           cd /release
-          sha256sum dankcalendar-bin-latest-x86_64.pkg.tar.zst > SHA256SUMS
+          sha256sum dankcalendar-git-latest-x86_64.pkg.tar.zst > SHA256SUMS
           sha256sum -c SHA256SUMS
           ls -lh *
 
@@ -147,23 +143,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: DankCalendar binary package (Arch Linux)
+          name: DankCalendar latest Git (Arch Linux · Zen 3)
           body: |
-            Automated Arch Linux binary package based on the upstream `dankcalendar-bin` AUR recipe.
+            Automated Arch Linux package built from the latest commit on the upstream `master` branch of [AvengeMedia/dankcalendar](https://github.com/AvengeMedia/dankcalendar), including recursive submodules.
 
-            - Package: `dankcalendar-bin`
+            This is a source build, not the upstream prebuilt release binary.
+
+            - Package: `dankcalendar-git`
             - Architecture: `x86_64`
-            - Source: official upstream prebuilt release binary (not compiled from source)
+            - CPU target: AMD Zen 3 / x86-64-v3 (`GOAMD64=v3`)
             - Runtime dependencies: `quickshell`, `qt6-declarative`
-            - Format: Arch Linux `.pkg.tar.zst`
+            - Package format: Arch Linux `.pkg.tar.zst`
 
             Install or update:
             ```bash
             sha256sum -c SHA256SUMS
-            sudo pacman -U dankcalendar-bin-latest-x86_64.pkg.tar.zst
+            sudo pacman -U dankcalendar-git-latest-x86_64.pkg.tar.zst
             ```
+
+            This build requires an x86-64-v3-capable CPU.
           files: |
-            /release/dankcalendar-bin-latest-x86_64.pkg.tar.zst
+            /release/dankcalendar-git-latest-x86_64.pkg.tar.zst
             /release/SHA256SUMS
           overwrite_files: true
           make_latest: true
