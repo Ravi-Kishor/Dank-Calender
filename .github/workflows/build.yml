@@ -131,9 +131,7 @@ jobs:
           grep -qx 'usr/share/icons/hicolor/scalable/apps/com.danklinux.dankcalendar.svg' <<< "$CONTENTS"
           grep -qx 'usr/lib/systemd/user/dcal.service' <<< "$CONTENTS"
 
-          VERSION="$(pacman -Qp --qf '%v' "$PKG")"
-          COMMIT="$(grep -oE 'r[0-9]+\.[0-9a-f]{8}' <<< "$VERSION" || true)"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Verified package: $(basename "$PKG")"
 
           cp "$PKG" /release/dankcalendar-git-latest-x86_64.pkg.tar.zst
           cd /release
