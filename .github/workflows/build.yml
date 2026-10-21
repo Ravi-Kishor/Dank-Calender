@@ -3,12 +3,9 @@ name: Build DankCalendar Zen 3 Package
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - ".github/workflows/dankcalendar-git-zen3.yml"
-      - "PKGBUILD"
-      - ".*"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: write
@@ -27,46 +24,84 @@ jobs:
       - name: Install build tools
         run: |
           pacman -Syu --noconfirm
-          pacman -S --needed --noconfirm git go base-devel jq coreutils findutils
+          pacman -S --needed --noconfirm git go sudo github-cli jq coreutils
 
-      - name: Checkout packaging repository
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Build package
+      - name: Build package from inline PKGBUILD
         id: build
         shell: bash
+        env:
+          UPSTREAM_REPO: https://github.com/duxlabs-dev/dux-calendar.git
         run: |
           set -Eeuo pipefail
 
-          # makepkg must run as an unprivileged user.
-          pacman -S --needed --noconfirm sudo
+          # Keep the PKGBUILD embedded in this workflow because this repository
+          # intentionally contains only build.yml.
+          BUILD_ROOT="/home/builder"
+          BUILD_DIR="$BUILD_ROOT/pkgbuild"
           useradd --create-home --shell /bin/bash builder || true
+          install -d -o builder -g builder "$BUILD_DIR"
 
+          cat > "$BUILD_DIR/PKGBUILD" <<'PKGBUILD'
+          pkgname=dankcalendar-git
+          pkgver=r1.0000000
+          pkgrel=1
+          pkgdesc="Calendar application from the Dank Linux suite"
+          arch=('x86_64')
+          url="https://github.com/duxlabs-dev/dux-calendar"
+          license=('GPL-3.0-or-later')
+          depends=('glibc' 'gcc-libs' 'qt6-declarative' 'qt6-svg' 'qt6-wayland' 'quickshell')
+          makedepends=('git' 'go')
+          provides=('dankcalendar')
+          conflicts=('dankcalendar')
+          source=("dux-calendar::git+https://github.com/duxlabs-dev/dux-calendar.git#branch=master")
+          sha256sums=('SKIP')
+          options=('!debug' '!strip')
+
+          pkgver() {
+            cd "$srcdir/dux-calendar"
+            printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+          }
+
+          prepare() {
+            cd "$srcdir/dux-calendar"
+            git submodule update --init --recursive
+          }
+
+          build() {
+            cd "$srcdir/dux-calendar"
+            export GOAMD64=v3
+            export CGO_ENABLED=0
+            make
+          }
+
+          package() {
+            cd "$srcdir/dux-calendar"
+            install -Dm755 dcal "$pkgdir/usr/bin/dcal"
+            install -Dm644 assets/dev.duxlabs.calendar.desktop "$pkgdir/usr/share/applications/dev.duxlabs.calendar.desktop"
+            install -Dm644 assets/dev.duxlabs.calendar.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.duxlabs.calendar.svg"
+            if [[ -f assets/dcal.service ]]; then
+              install -Dm644 assets/dcal.service "$pkgdir/usr/lib/systemd/user/dcal.service"
+            fi
+          }
+          PKGBUILD
+
+          chown builder:builder "$BUILD_DIR/PKGBUILD"
           cat > /etc/sudoers.d/builder <<'SUDOERS'
           builder ALL=(ALL:ALL) NOPASSWD: ALL
           SUDOERS
           chmod 0440 /etc/sudoers.d/builder
           visudo -cf /etc/sudoers.d/builder
 
-          BUILD_DIR="/home/builder/src"
-          install -d -o builder -g builder "$BUILD_DIR"
-
-          # Copy the checked-out repository contents into the build directory.
-          cp -a "$GITHUB_WORKSPACE/." "$BUILD_DIR/"
-          chown -R builder:builder "$BUILD_DIR"
-
-          if [[ ! -f "$BUILD_DIR/PKGBUILD" ]]; then
-            echo "❌ PKGBUILD not found in $BUILD_DIR"
-            echo "Workspace root: $GITHUB_WORKSPACE"
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -name PKGBUILD -print
-            exit 12
-          fi
+          # Resolve runtime/build dependencies before makepkg starts.
+          pacman -S --needed --noconfirm git go qt6-declarative qt6-svg qt6-wayland quickshell
 
           sudo -u builder -H bash -Eeuo pipefail -c '
-            cd /home/builder/src
-            test -f PKGBUILD
+            cd /home/builder/pkgbuild
             makepkg --syncdeps --noconfirm --cleanbuild --clean
           '
 
@@ -77,40 +112,36 @@ jobs:
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           echo "Built package version: $PKG_VERSION"
 
-      - name: Stage stable asset names and checksums
-        id: assets
-        shell: bash
+      - name: Stage release assets
         run: |
           set -Eeuo pipefail
           mkdir -p release-assets
-          cp "${{ steps.build.outputs.pkg_path }}" "release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst"
+          cp "${{ steps.build.outputs.pkg_path }}" release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst
           cd release-assets
           sha256sum dankcalendar-git-latest-x86_64_v3.pkg.tar.zst > SHA256SUMS
           printf '%s\n' '${{ steps.build.outputs.pkg_version }}' > PACKAGE_VERSION
-          echo "asset_dir=release-assets" >> "$GITHUB_OUTPUT"
 
-      - name: Publish rolling GitHub release
+      - name: Publish rolling release
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_VERSION: ${{ steps.build.outputs.pkg_version }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          pacman -S --needed --noconfirm github-cli
-          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+
+          if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create latest \
               --repo "$GITHUB_REPOSITORY" \
-              --title "DankCalendar latest Git (Arch Linux · Zen 3)" \
-              --notes "Automated Arch Linux package from duxlabs-dev/dux-calendar master. Package: dankcalendar-git. Architecture: x86_64. CPU target: AMD Zen 3 / x86-64-v3 (GOAMD64=v3). The _x86_64_v3 asset requires an x86-64-v3-capable CPU."
+              --title "DankCalendar latest Git (x86-64-v3)" \
+              --notes "Rolling Arch Linux package built from duxlabs-dev/dux-calendar master. The package targets x86-64-v3."
+          fi
 
-          # Remove previous rolling assets so the release only exposes the
-          # current package, checksum, and package-version metadata.
-          gh release delete-asset latest dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
-            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
-          gh release delete-asset latest SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
-          gh release delete-asset latest PACKAGE_VERSION \
-            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          for asset in \
+            dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
+            SHA256SUMS \
+            PACKAGE_VERSION; do
+            gh release delete-asset latest "$asset" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          done
 
           gh release upload latest \
             release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
@@ -118,9 +149,7 @@ jobs:
             release-assets/PACKAGE_VERSION \
             --repo "$GITHUB_REPOSITORY"
 
-          # Update the release notes with the package version so the updater
-          # can check it without downloading the large package.
           gh release edit latest \
             --repo "$GITHUB_REPOSITORY" \
-            --title "DankCalendar latest Git (Arch Linux · Zen 3)" \
-            --notes "Automated Arch Linux package from duxlabs-dev/dux-calendar master. Package: dankcalendar-git. Package version: ${PACKAGE_VERSION}. Architecture: x86_64. CPU target: AMD Zen 3 / x86-64-v3 (GOAMD64=v3). The _x86_64_v3 asset requires an x86-64-v3-capable CPU."
+            --title "DankCalendar latest Git (x86-64-v3)" \
+            --notes "Rolling Arch Linux package built from duxlabs-dev/dux-calendar master. Package version: ${PACKAGE_VERSION}. CPU target: x86-64-v3."
