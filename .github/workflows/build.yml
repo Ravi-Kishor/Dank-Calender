@@ -1,4 +1,4 @@
-name: Build DankCalendar Zen 3 Package
+name: Build Dux Calendar Zen 3 Package
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: dankcalendar-zen3-release
+  group: dux-calendar-zen3-release
   cancel-in-progress: false
 
 jobs:
@@ -34,29 +34,27 @@ jobs:
       - name: Build package from inline PKGBUILD
         id: build
         shell: bash
-        env:
-          UPSTREAM_REPO: https://github.com/duxlabs-dev/dux-calendar.git
         run: |
           set -Eeuo pipefail
 
-          # Keep the PKGBUILD embedded in this workflow because this repository
-          # intentionally contains only build.yml.
-          BUILD_ROOT="/home/builder"
-          BUILD_DIR="$BUILD_ROOT/pkgbuild"
+          # This repository intentionally contains only build.yml, so define
+          # the PKGBUILD here and build the upstream Dux Calendar monorepo.
+          BUILD_DIR="/home/builder/pkgbuild"
           useradd --create-home --shell /bin/bash builder || true
           install -d -o builder -g builder "$BUILD_DIR"
 
           cat > "$BUILD_DIR/PKGBUILD" <<'PKGBUILD'
-          pkgname=dankcalendar-git
+          pkgname=dux-calendar-git
+          _pkgbase=dux-calendar
           pkgver=r1.0000000
           pkgrel=1
-          pkgdesc="Calendar application from the Dank Linux suite"
+          pkgdesc="Standalone calendar app with local, Google, Microsoft, CalDAV and iCloud calendar support"
           arch=('x86_64')
           url="https://github.com/duxlabs-dev/dux-calendar"
           license=('GPL-3.0-or-later')
-          depends=('glibc' 'gcc-libs' 'qt6-declarative' 'qt6-svg' 'qt6-wayland' 'quickshell')
-          makedepends=('git' 'go')
-          provides=('dankcalendar')
+          depends=('glibc' 'gcc-libs' 'quickshell' 'qt6-declarative' 'qt6-svg' 'qt6-wayland')
+          makedepends=('git' 'go>=1.25')
+          provides=('dux-calendar' 'dankcalendar')
           conflicts=('dankcalendar')
           source=("dux-calendar::git+https://github.com/duxlabs-dev/dux-calendar.git#branch=master")
           sha256sums=('SKIP')
@@ -81,12 +79,28 @@ jobs:
 
           package() {
             cd "$srcdir/dux-calendar"
-            install -Dm755 dcal "$pkgdir/usr/bin/dcal"
-            install -Dm644 assets/dev.duxlabs.calendar.desktop "$pkgdir/usr/share/applications/dev.duxlabs.calendar.desktop"
-            install -Dm644 assets/dev.duxlabs.calendar.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.duxlabs.calendar.svg"
+            install -Dm755 core/bin/dcal "$pkgdir/usr/bin/dcal"
+
+            # The upstream Makefile installs desktop integration and the icon.
+            # Mirror those paths from the repository assets directory.
+            if [[ -f assets/dev.duxlabs.calendar.desktop ]]; then
+              install -Dm644 assets/dev.duxlabs.calendar.desktop "$pkgdir/usr/share/applications/dev.duxlabs.calendar.desktop"
+            elif [[ -f assets/dev.duxlabs.calendar.desktop.in ]]; then
+              install -Dm644 assets/dev.duxlabs.calendar.desktop.in "$pkgdir/usr/share/applications/dev.duxlabs.calendar.desktop"
+            fi
+
+            if [[ -f assets/dev.duxlabs.calendar.svg ]]; then
+              install -Dm644 assets/dev.duxlabs.calendar.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.duxlabs.calendar.svg"
+            elif [[ -f assets/dev.duxlabs.calendar.png ]]; then
+              install -Dm644 assets/dev.duxlabs.calendar.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/dev.duxlabs.calendar.png"
+            fi
+
             if [[ -f assets/dcal.service ]]; then
               install -Dm644 assets/dcal.service "$pkgdir/usr/lib/systemd/user/dcal.service"
             fi
+
+            # Ensure at least the executable is present in the final package.
+            test -x "$pkgdir/usr/bin/dcal"
           }
           PKGBUILD
 
@@ -97,8 +111,9 @@ jobs:
           chmod 0440 /etc/sudoers.d/builder
           visudo -cf /etc/sudoers.d/builder
 
-          # Resolve runtime/build dependencies before makepkg starts.
-          pacman -S --needed --noconfirm git go qt6-declarative qt6-svg qt6-wayland quickshell
+          # Runtime libraries and Go are installed as root; makepkg itself runs
+          # as the unprivileged builder account.
+          pacman -S --needed --noconfirm git go quickshell qt6-declarative qt6-svg qt6-wayland
 
           sudo -u builder -H bash -Eeuo pipefail -c '
             cd /home/builder/pkgbuild
@@ -116,9 +131,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p release-assets
-          cp "${{ steps.build.outputs.pkg_path }}" release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst
+          cp "${{ steps.build.outputs.pkg_path }}" release-assets/dux-calendar-git-latest-x86_64_v3.pkg.tar.zst
           cd release-assets
-          sha256sum dankcalendar-git-latest-x86_64_v3.pkg.tar.zst > SHA256SUMS
+          sha256sum dux-calendar-git-latest-x86_64_v3.pkg.tar.zst > SHA256SUMS
           printf '%s\n' '${{ steps.build.outputs.pkg_version }}' > PACKAGE_VERSION
 
       - name: Publish rolling release
@@ -132,24 +147,24 @@ jobs:
           if ! gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create latest \
               --repo "$GITHUB_REPOSITORY" \
-              --title "DankCalendar latest Git (x86-64-v3)" \
-              --notes "Rolling Arch Linux package built from duxlabs-dev/dux-calendar master. The package targets x86-64-v3."
+              --title "Dux Calendar latest Git (x86-64-v3)" \
+              --notes "Rolling Arch Linux package built from dux-calendar master. Package: dux-calendar-git. CPU target: x86-64-v3."
           fi
 
           for asset in \
-            dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
+            dux-calendar-git-latest-x86_64_v3.pkg.tar.zst \
             SHA256SUMS \
             PACKAGE_VERSION; do
             gh release delete-asset latest "$asset" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
           done
 
           gh release upload latest \
-            release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
+            release-assets/dux-calendar-git-latest-x86_64_v3.pkg.tar.zst \
             release-assets/SHA256SUMS \
             release-assets/PACKAGE_VERSION \
             --repo "$GITHUB_REPOSITORY"
 
           gh release edit latest \
             --repo "$GITHUB_REPOSITORY" \
-            --title "DankCalendar latest Git (x86-64-v3)" \
-            --notes "Rolling Arch Linux package built from duxlabs-dev/dux-calendar master. Package version: ${PACKAGE_VERSION}. CPU target: x86-64-v3."
+            --title "Dux Calendar latest Git (x86-64-v3)" \
+            --notes "Rolling Arch Linux package built from dux-calendar master. Package version: ${PACKAGE_VERSION}. CPU target: x86-64-v3."
