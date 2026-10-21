@@ -40,21 +40,33 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # makepkg must never run as root. Install dependencies as root,
-          # then build from a writable copy as an unprivileged user.
+          # makepkg must run as an unprivileged user.
           pacman -S --needed --noconfirm sudo
+          useradd --create-home --shell /bin/bash builder || true
 
-          useradd --create-home --shell /bin/bash builder
-          printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/builder
+          cat > /etc/sudoers.d/builder <<'SUDOERS'
+          builder ALL=(ALL:ALL) NOPASSWD: ALL
+          SUDOERS
           chmod 0440 /etc/sudoers.d/builder
+          visudo -cf /etc/sudoers.d/builder
 
           BUILD_DIR="/home/builder/src"
           install -d -o builder -g builder "$BUILD_DIR"
+
+          # Copy the checked-out repository contents into the build directory.
           cp -a "$GITHUB_WORKSPACE/." "$BUILD_DIR/"
           chown -R builder:builder "$BUILD_DIR"
 
+          if [[ ! -f "$BUILD_DIR/PKGBUILD" ]]; then
+            echo "❌ PKGBUILD not found in $BUILD_DIR"
+            echo "Workspace root: $GITHUB_WORKSPACE"
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -name PKGBUILD -print
+            exit 12
+          fi
+
           sudo -u builder -H bash -Eeuo pipefail -c '
             cd /home/builder/src
+            test -f PKGBUILD
             makepkg --syncdeps --noconfirm --cleanbuild --clean
           '
 
