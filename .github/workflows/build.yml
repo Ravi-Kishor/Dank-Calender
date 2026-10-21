@@ -40,10 +40,25 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # The package build runs in an Arch container; keep package metadata
-          # separate from the moving release asset filename.
-          makepkg --syncdeps --noconfirm --cleanbuild --clean
-          PKG_PATH="$(find . -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
+          # makepkg must never run as root. Install dependencies as root,
+          # then build from a writable copy as an unprivileged user.
+          pacman -S --needed --noconfirm sudo
+
+          useradd --create-home --shell /bin/bash builder
+          printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+
+          BUILD_DIR="/home/builder/src"
+          install -d -o builder -g builder "$BUILD_DIR"
+          cp -a "$GITHUB_WORKSPACE/." "$BUILD_DIR/"
+          chown -R builder:builder "$BUILD_DIR"
+
+          sudo -u builder -H bash -Eeuo pipefail -c '
+            cd /home/builder/src
+            makepkg --syncdeps --noconfirm --cleanbuild --clean
+          '
+
+          PKG_PATH="$(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
           test -n "$PKG_PATH"
           PKG_VERSION="$(pacman -Qp --print-format '%v' "$PKG_PATH")"
           echo "pkg_path=$PKG_PATH" >> "$GITHUB_OUTPUT"
