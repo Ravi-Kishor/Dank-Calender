@@ -1,179 +1,99 @@
-name: Build DankCalendar Git (Arch Linux / Zen 3)
+name: Build DankCalendar Zen 3 Package
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 0 * * *" # Daily at 00:17 UTC / 05:47 IST
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dankcalendar-git-zen3.yml"
+      - "PKGBUILD"
+      - ".*"
 
 permissions:
   contents: write
 
 concurrency:
-  group: dankcalendar-git-release
+  group: dankcalendar-zen3-release
   cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: archlinux:latest
+      image: archlinux:base-devel
 
     steps:
-      - name: Update Arch build environment
-        shell: bash
+      - name: Install build tools
         run: |
-          set -euo pipefail
           pacman -Syu --noconfirm
-          pacman -S --needed --noconfirm \
-            base-devel git go make binutils zstd libarchive sudo quickshell qt6-declarative
+          pacman -S --needed --noconfirm git go base-devel jq coreutils findutils
 
-      - name: Create unprivileged builder
-        shell: bash
-        run: |
-          set -euo pipefail
-          useradd --create-home builder
-          printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
-          chmod 0440 /etc/sudoers.d/builder
-          install -d -o builder -g builder /build/dankcalendar
-          install -d -o builder -g builder /release
-
-      - name: Create PKGBUILD for latest upstream Git
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /build/dankcalendar/PKGBUILD <<'PKGBUILD'
-          pkgname=dankcalendar-git
-          pkgver=0
-          pkgrel=1
-          options=('!debug')
-          pkgdesc='Local, Google, Microsoft, CalDAV, and iCloud calendars for the Dank desktop (latest Git build)'
-          arch=('x86_64')
-          url='https://github.com/duxlabs-dev/dux-calendar'
-          license=('MIT')
-          depends=('quickshell' 'qt6-declarative')
-          optdepends=('dms-shell: dynamic theming via DankMaterialShell colors')
-          makedepends=('git' 'go' 'make')
-          provides=('dcal' 'dankcalendar')
-          conflicts=('dcal' 'dankcalendar' 'dankcalendar-bin')
-          source=('dankcalendar::git+https://github.com/duxlabs-dev/dux-calendar.git#branch=master')
-          sha256sums=('SKIP')
-
-          pkgver() {
-            cd "$srcdir/dankcalendar"
-            printf 'r%s.%s' \
-              "$(git rev-list --count HEAD)" \
-              "$(git rev-parse --short=8 HEAD)"
-          }
-
-          prepare() {
-            cd "$srcdir/dankcalendar"
-            git submodule sync --recursive
-            git submodule update --init --recursive
-          }
-
-          build() {
-            cd "$srcdir/dankcalendar"
-            export GOAMD64=v3
-            export CGO_ENABLED=0
-            export GOFLAGS='-trimpath'
-            export GOTOOLCHAIN=local
-            export MAKEFLAGS="-j$(nproc)"
-            make
-          }
-
-          check() {
-            cd "$srcdir/dankcalendar"
-            export GOAMD64=v3
-            export CGO_ENABLED=0
-            export GOFLAGS='-trimpath'
-            export GOTOOLCHAIN=local
-            make test
-          }
-
-          package() {
-            cd "$srcdir/dankcalendar"
-            make PREFIX=/usr DESTDIR="$pkgdir" install
-
-            install -Dm644 LICENSE \
-              "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-            install -Dm644 README.md \
-              "$pkgdir/usr/share/doc/$pkgname/README.md"
-            install -Dm644 assets/systemd/dcal.service \
-              "$pkgdir/usr/lib/systemd/user/dcal.service"
-          }
-          PKGBUILD
-
-          chown -R builder:builder /build/dankcalendar
-
-      - name: Build latest upstream package
-        shell: bash
-        run: |
-          set -euo pipefail
-          su builder -s /bin/bash -c \
-            'set -euo pipefail; cd /build/dankcalendar; makepkg --syncdeps --cleanbuild --clean --noconfirm'
-
-      - name: Verify package and prepare release assets
-        id: verify
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd /build/dankcalendar
-
-          mapfile -t PACKAGES < <(find . -maxdepth 1 -type f -name 'dankcalendar-git-*.pkg.tar.zst' ! -name 'dankcalendar-git-debug-*' -print)
-          if (( ${#PACKAGES[@]} != 1 )); then
-            echo "::error::Expected exactly one non-debug package; found ${#PACKAGES[@]}"
-            printf '%s\n' "${PACKAGES[@]}"
-            exit 1
-          fi
-          PKG="${PACKAGES[0]}"
-          pacman -Qip "$PKG"
-
-          CONTENTS="$(bsdtar -tf "$PKG")"
-          grep -qx 'usr/bin/dcal' <<< "$CONTENTS"
-          grep -qx 'usr/share/applications/dev.duxlabs.calendar.desktop' <<< "$CONTENTS"
-          grep -qx 'usr/share/icons/hicolor/scalable/apps/dev.duxlabs.calendar.svg' <<< "$CONTENTS"
-          grep -qx 'usr/lib/systemd/user/dcal.service' <<< "$CONTENTS"
-
-          bsdtar -xOf "$PKG" usr/bin/dcal > /tmp/dcal
-          go version -m /tmp/dcal | tee /tmp/dcal-build-info.txt
-          grep -Eq 'GOAMD64=v3' /tmp/dcal-build-info.txt || {
-            echo "::error::Binary metadata does not confirm GOAMD64=v3."
-            exit 1
-          }
-
-          RELEASE_ASSET='dankcalendar-git-latest-x86_64_v3.pkg.tar.zst'
-          cp "$PKG" "/release/$RELEASE_ASSET"
-          cd /release
-          sha256sum "$RELEASE_ASSET" > SHA256SUMS
-          sha256sum -c SHA256SUMS
-          ls -lh *
-
-      - name: Publish or update rolling GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Checkout packaging repository
+        uses: actions/checkout@v4
         with:
-          tag_name: latest
-          name: DankCalendar latest Git (Arch Linux · Zen 3)
-          body: |
-            Automated Arch Linux package built from the latest commit on the upstream [duxlabs-dev/dux-calendar](https://github.com/duxlabs-dev/dux-calendar) `master` branch, including recursive submodules.
+          fetch-depth: 0
 
-            This is a source build, not an upstream prebuilt release binary.
+      - name: Build package
+        id: build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
-            - Package: `dankcalendar-git`
-            - Architecture: `x86_64`
-            - CPU target: AMD Zen 3 / x86-64-v3 (`GOAMD64=v3`)
-            - Runtime dependencies: `quickshell`, `qt6-declarative`
-            - Package format: Arch Linux `.pkg.tar.zst`
-            - Asset suffix `_x86_64_v3` indicates this build requires an x86-64-v3-capable CPU.
+          # The package build runs in an Arch container; keep package metadata
+          # separate from the moving release asset filename.
+          makepkg --syncdeps --noconfirm --cleanbuild --clean
+          PKG_PATH="$(find . -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
+          test -n "$PKG_PATH"
+          PKG_VERSION="$(pacman -Qp --print-format '%v' "$PKG_PATH")"
+          echo "pkg_path=$PKG_PATH" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Built package version: $PKG_VERSION"
 
-            Install or update:
-            ```bash
-            sha256sum -c SHA256SUMS
-            sudo pacman -U dankcalendar-git-latest-x86_64_v3.pkg.tar.zst
-            ```
-          files: |
-            /release/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst
-            /release/SHA256SUMS
-          overwrite_files: true
-          make_latest: true
+      - name: Stage stable asset names and checksums
+        id: assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release-assets
+          cp "${{ steps.build.outputs.pkg_path }}" "release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst"
+          cd release-assets
+          sha256sum dankcalendar-git-latest-x86_64_v3.pkg.tar.zst > SHA256SUMS
+          printf '%s\n' '${{ steps.build.outputs.pkg_version }}' > PACKAGE_VERSION
+          echo "asset_dir=release-assets" >> "$GITHUB_OUTPUT"
+
+      - name: Publish rolling GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ steps.build.outputs.pkg_version }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pacman -S --needed --noconfirm github-cli
+          gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DankCalendar latest Git (Arch Linux · Zen 3)" \
+              --notes "Automated Arch Linux package from duxlabs-dev/dux-calendar master. Package: dankcalendar-git. Architecture: x86_64. CPU target: AMD Zen 3 / x86-64-v3 (GOAMD64=v3). The _x86_64_v3 asset requires an x86-64-v3-capable CPU."
+
+          # Remove previous rolling assets so the release only exposes the
+          # current package, checksum, and package-version metadata.
+          gh release delete-asset latest dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
+            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release delete-asset latest SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release delete-asset latest PACKAGE_VERSION \
+            --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+
+          gh release upload latest \
+            release-assets/dankcalendar-git-latest-x86_64_v3.pkg.tar.zst \
+            release-assets/SHA256SUMS \
+            release-assets/PACKAGE_VERSION \
+            --repo "$GITHUB_REPOSITORY"
+
+          # Update the release notes with the package version so the updater
+          # can check it without downloading the large package.
+          gh release edit latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "DankCalendar latest Git (Arch Linux · Zen 3)" \
+            --notes "Automated Arch Linux package from duxlabs-dev/dux-calendar master. Package: dankcalendar-git. Package version: ${PACKAGE_VERSION}. Architecture: x86_64. CPU target: AMD Zen 3 / x86-64-v3 (GOAMD64=v3). The _x86_64_v3 asset requires an x86-64-v3-capable CPU."
